@@ -29,7 +29,17 @@ const Layout = ({ children }) => {
         Cookies.set('sidebar_state', newState, { expires: 365 });
     };
 
-    const toggleMobileMenu = () => setIsMobileMenuOpen(!isMobileMenuOpen);
+    const toggleMobileMenu = () => setIsMobileMenuOpen(prev => !prev);
+
+    // Prevent body scroll when mobile menu is open
+    useEffect(() => {
+        if (isMobileMenuOpen) {
+            document.body.style.overflow = 'hidden';
+        } else {
+            document.body.style.overflow = '';
+        }
+        return () => { document.body.style.overflow = ''; };
+    }, [isMobileMenuOpen]);
 
     const [version, setVersion] = useState('');
     const [isDarkMode, setIsDarkMode] = useState(() => {
