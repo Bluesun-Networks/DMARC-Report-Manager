@@ -295,12 +295,23 @@ body {
   border-color: #cbd5e1;
 }
 
+.btn-secondary svg {
+  color: currentColor;
+}
+
 .btn-secondary:disabled {
   cursor: not-allowed;
   opacity: 0.65;
 }
 
+body.dark-theme .btn-secondary {
+  background-color: #0f172a;
+  color: #f8fafc;
+  border-color: #334155;
+}
+
 body.dark-theme .btn-secondary:hover {
+  background-color: #020617;
   border-color: #334155;
 }
 
