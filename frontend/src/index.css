@@ -278,7 +278,7 @@ body {
 }
 
 .btn-secondary {
-  background-color: white;
+  background-color: var(--card-bg);
   color: var(--text-main);
   border: 1px solid var(--border-color);
   padding: 0.625rem 1.25rem;
@@ -293,6 +293,15 @@ body {
 .btn-secondary:hover {
   background-color: var(--bg-color);
   border-color: #cbd5e1;
+}
+
+.btn-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+body.dark-theme .btn-secondary:hover {
+  border-color: #334155;
 }
 
 /* Stats Cards */
