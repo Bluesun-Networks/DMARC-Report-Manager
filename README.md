@@ -186,6 +186,11 @@ uv run python -m backend.cli.main troubleshoot example.com
 # Import reports
 uv run python -m backend.cli.main import ./path/to/reports/
 
+# Configure and run email monitoring
+./bin/email-monitor configure --protocol imap --host imap.example.com --port 993 --user dmarc@example.com --password 'app-password' --ssl true --mailbox inbox --unread-only true --interval 60 --enable true
+./bin/email-monitor run
+./bin/email-monitor status
+
 # Reset admin password (utility script)
 ./bin/reset-admin-password [new_password]
 ```

@@ -80,7 +80,7 @@ Update the current user's profile (name, email, phone, or password). (Requires A
 
 ---
 
-### 2. File Management
+### 3. File Management
 
 #### `POST /api/upload`
 Upload DMARC XML files (optionally gzipped or zipped). Files are automatically processed into the database upon upload.
@@ -113,9 +113,49 @@ Delete a specific uploaded file from storage (does not delete processed records 
 curl -X DELETE http://localhost:8000/api/files/google.com!example.com!1712345678.xml
 ```
 
+#### `POST /api/fetch-email`
+Run one email retrieval pass using the configured IMAP or POP3 account, save matching report attachments, and process them.
+(Requires Auth)
+
+**Example:**
+```bash
+curl -X POST http://localhost:8000/api/fetch-email
+```
+
 ---
 
-### 3. Reports & Analytics
+### 4. Email Monitoring
+
+#### `GET /api/email-monitor`
+Get monitor status, including enabled/running state, interval, last run, next run, and last result.
+(Requires Auth)
+
+#### `POST /api/email-monitor/run`
+Run one email monitoring pass immediately.
+(Requires Auth)
+
+#### `POST /api/email-monitor/start`
+Enable and start automatic email monitoring.
+(Requires Admin)
+
+#### `POST /api/email-monitor/stop`
+Disable and stop automatic email monitoring.
+(Requires Admin)
+
+#### `GET /api/settings` / `PUT /api/settings`
+Global settings include email monitoring configuration:
+
+- `email_protocol`: `imap` or `pop3`
+- `imap_host`, `imap_port`, `imap_user`, `imap_pass`, `imap_use_ssl`
+- `email_mailbox`: IMAP mailbox name
+- `email_only_unread`: IMAP unread-only mode
+- `email_delete_after_fetch`: POP3 delete-after-download mode
+- `email_monitor_enabled`: automatic monitor enabled flag
+- `email_check_interval_minutes`: automatic monitor interval
+
+---
+
+### 5. Reports & Analytics
 
 #### `GET /api/stats`
 Get aggregated statistics for the dashboard.
@@ -181,7 +221,7 @@ curl http://localhost:8000/api/domains
 
 ---
 
-### 5. User Management (Admin Only)
+### 6. User Management (Admin Only)
 
 #### `GET /api/users`
 List all user accounts in the system. (Requires Admin)

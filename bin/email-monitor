@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+
+# email-monitor: Configure and run DMARC email monitoring through the backend API.
+#
+# Usage:
+#   ./bin/email-monitor status
+#   ./bin/email-monitor run
+#   ./bin/email-monitor start
+#   ./bin/email-monitor stop
+#   ./bin/email-monitor configure [options]
+#
+# Configure options:
+#   --protocol imap|pop3
+#   --host HOST
+#   --port PORT
+#   --user USER
+#   --password PASSWORD
+#   --ssl true|false
+#   --mailbox NAME
+#   --unread-only true|false
+#   --delete-after-fetch true|false
+#   --interval MINUTES
+#   --enable true|false
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+if [ -f "$ROOT_DIR/.env" ]; then
+  set -a
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
+API_BASE="${DMARC_API_URL:-${VITE_API_URL:-http://localhost:8000}}"
+ARGS=("$@")
+
+for i in "${!ARGS[@]}"; do
+  if [[ "${ARGS[$i]}" == "--api-url" ]]; then
+    next=$((i + 1))
+    if [[ "$next" -lt "${#ARGS[@]}" ]]; then
+      API_BASE="${ARGS[$next]}"
+    fi
+  fi
+done
+
+print_usage() {
+  sed -n '3,24p' "$0"
+}
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+bool_value() {
+  case "$1" in
+    true|false) printf '%s' "$1" ;;
+    1|yes|on) printf 'true' ;;
+    0|no|off) printf 'false' ;;
+    *) echo "Invalid boolean value: $1" >&2; exit 1 ;;
+  esac
+}
+
+command="${1:-}"
+shift || true
+
+case "$command" in
+  --api-url)
+    API_BASE="$1"
+    shift
+    command="${1:-}"
+    shift || true
+    ;;
+esac
+
+case "$command" in
+  ""|-h|--help|help)
+    print_usage
+    exit 0
+    ;;
+esac
+
+AUTH_ARGS=()
+if [[ -n "${DMARC_API_KEY:-}" ]]; then
+  AUTH_ARGS=(-H "X-API-Key: $DMARC_API_KEY")
+elif [[ -n "${DMARC_USERNAME:-}" && -n "${DMARC_PASSWORD:-}" ]]; then
+  LOGIN_URL="${API_BASE%/}/api/login"
+  login_response=$(curl -s -X POST "$LOGIN_URL" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"$(json_escape "$DMARC_USERNAME")\",\"password\":\"$(json_escape "$DMARC_PASSWORD")\"}")
+  TOKEN=$(echo "$login_response" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+  if [[ -z "$TOKEN" ]]; then
+    echo "Login failed: $login_response" >&2
+    exit 1
+  fi
+  AUTH_ARGS=(-H "Authorization: Bearer $TOKEN")
+else
+  echo "No auth configured. Set DMARC_API_KEY or DMARC_USERNAME+DMARC_PASSWORD in .env." >&2
+  exit 1
+fi
+
+api_call() {
+  local method="$1"
+  local path="$2"
+  local body="${3:-}"
+  local url="${API_BASE%/}${path}"
+  if [[ -n "$body" ]]; then
+    curl -s -X "$method" "${AUTH_ARGS[@]}" -H "Content-Type: application/json" -d "$body" "$url"
+  else
+    curl -s -X "$method" "${AUTH_ARGS[@]}" "$url"
+  fi
+  echo
+}
+
+case "$command" in
+  status)
+    api_call GET /api/email-monitor
+    ;;
+  run|run-now)
+    api_call POST /api/email-monitor/run
+    ;;
+  start)
+    api_call POST /api/email-monitor/start
+    ;;
+  stop)
+    api_call POST /api/email-monitor/stop
+    ;;
+  configure)
+    fields=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --protocol) fields+=("\"email_protocol\":\"$(json_escape "$2")\""); shift 2 ;;
+        --host) fields+=("\"imap_host\":\"$(json_escape "$2")\""); shift 2 ;;
+        --port) fields+=("\"imap_port\":$2"); shift 2 ;;
+        --user) fields+=("\"imap_user\":\"$(json_escape "$2")\""); shift 2 ;;
+        --password) fields+=("\"imap_pass\":\"$(json_escape "$2")\""); shift 2 ;;
+        --ssl) fields+=("\"imap_use_ssl\":$(bool_value "$2")"); shift 2 ;;
+        --mailbox) fields+=("\"email_mailbox\":\"$(json_escape "$2")\""); shift 2 ;;
+        --unread-only) fields+=("\"email_only_unread\":$(bool_value "$2")"); shift 2 ;;
+        --delete-after-fetch) fields+=("\"email_delete_after_fetch\":$(bool_value "$2")"); shift 2 ;;
+        --interval) fields+=("\"email_check_interval_minutes\":$2"); shift 2 ;;
+        --enable) fields+=("\"email_monitor_enabled\":$(bool_value "$2")"); shift 2 ;;
+        --api-url) API_BASE="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; print_usage; exit 1 ;;
+      esac
+    done
+    if [[ ${#fields[@]} -eq 0 ]]; then
+      echo "No settings provided." >&2
+      print_usage
+      exit 1
+    fi
+    body="{"
+    for i in "${!fields[@]}"; do
+      if [[ "$i" -gt 0 ]]; then body+=","; fi
+      body+="${fields[$i]}"
+    done
+    body+="}"
+    api_call PUT /api/settings "$body"
+    ;;
+  *)
+    echo "Unknown command: $command" >&2
+    print_usage
+    exit 1
+    ;;
+esac

@@ -46,13 +46,23 @@ from backend.dmarc_lib.db import (
 from backend.dmarc_lib.enrichment import batch_enrich_ips
 from backend.dmarc_lib.pdf_gen import generate_summary_pdf
 from backend.dmarc_lib.alerts import check_for_spikes
-from backend.dmarc_lib.email_fetch import fetch_dmarc_reports
+from backend.dmarc_lib.email_monitor import (
+    configure_email_monitor,
+    disable_email_monitor,
+    get_email_monitor_status,
+    restart_email_monitor,
+    run_email_monitor_once,
+    start_email_monitor,
+    stop_email_monitor,
+)
 import backend.web.config as config
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    await configure_email_monitor(process_single_file)
     yield
+    await stop_email_monitor()
 
 # Rate Limiting
 limiter = Limiter(key_func=get_remote_address)
@@ -432,16 +442,32 @@ async def upload_files(
 
 @app.post("/api/fetch-email")
 async def fetch_email_reports(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
-    """Trigger IMAP fetch and process new reports in background."""
-    new_files = fetch_dmarc_reports()
-    if not new_files:
-        return {"message": "No new reports found in email."}
-    
-    for filename in new_files:
-        file_path = UPLOAD_DIR / filename
-        background_tasks.add_task(process_single_file, file_path)
-    
-    return {"message": f"Found {len(new_files)} new reports. Processing in background.", "files": new_files}
+    """Trigger email fetch and process new reports."""
+    result = await run_email_monitor_once()
+    if not result["success"]:
+        raise HTTPException(status_code=502, detail=result["message"])
+    return result
+
+@app.get("/api/email-monitor")
+async def email_monitor_status(current_user: dict = Depends(get_current_user)):
+    return get_email_monitor_status()
+
+@app.post("/api/email-monitor/run")
+async def email_monitor_run_now(current_user: dict = Depends(get_current_user)):
+    result = await run_email_monitor_once()
+    if not result["success"]:
+        raise HTTPException(status_code=502, detail=result["message"])
+    return result
+
+@app.post("/api/email-monitor/start")
+async def email_monitor_start(admin: dict = Depends(get_admin_user)):
+    await start_email_monitor(process_single_file)
+    return get_email_monitor_status()
+
+@app.post("/api/email-monitor/stop")
+async def email_monitor_stop(admin: dict = Depends(get_admin_user)):
+    await disable_email_monitor()
+    return get_email_monitor_status()
 
 @app.delete("/api/reports")
 async def delete_reports_endpoint(start: Optional[int] = None, end: Optional[int] = None, domain: Optional[str] = None, org_name: Optional[str] = None, days: Optional[int] = None, current_user: dict = Depends(get_current_user)):
@@ -505,6 +531,12 @@ async def remove_user(id: int, admin: dict = Depends(get_admin_user)):
 
 class SettingsUpdate(BaseModel):
     slack_webhook_url: Optional[str] = None
+    email_protocol: Optional[str] = None
+    email_mailbox: Optional[str] = None
+    email_only_unread: Optional[bool] = None
+    email_delete_after_fetch: Optional[bool] = None
+    email_monitor_enabled: Optional[bool] = None
+    email_check_interval_minutes: Optional[int] = None
     imap_host: Optional[str] = None
     imap_port: Optional[int] = None
     imap_user: Optional[str] = None
@@ -515,6 +547,12 @@ class SettingsUpdate(BaseModel):
 async def get_all_settings(admin: dict = Depends(get_admin_user)):
     return {
         "slack_webhook_url": get_setting("slack_webhook_url", ""),
+        "email_protocol": get_setting("email_protocol", "imap"),
+        "email_mailbox": get_setting("email_mailbox", "inbox"),
+        "email_only_unread": get_setting("email_only_unread", True),
+        "email_delete_after_fetch": get_setting("email_delete_after_fetch", False),
+        "email_monitor_enabled": get_setting("email_monitor_enabled", False),
+        "email_check_interval_minutes": get_setting("email_check_interval_minutes", 60),
         "imap_host": get_setting("imap_host", ""),
         "imap_port": get_setting("imap_port", 993),
         "imap_user": get_setting("imap_user", ""),
@@ -524,8 +562,26 @@ async def get_all_settings(admin: dict = Depends(get_admin_user)):
 
 @app.put("/api/settings")
 async def update_settings(settings: SettingsUpdate, admin: dict = Depends(get_admin_user)):
+    changed_fields = settings.model_fields_set
     if settings.slack_webhook_url is not None:
         set_setting("slack_webhook_url", settings.slack_webhook_url)
+    if settings.email_protocol is not None:
+        protocol = settings.email_protocol.lower()
+        if protocol not in ("imap", "pop3"):
+            raise HTTPException(status_code=400, detail="email_protocol must be 'imap' or 'pop3'")
+        set_setting("email_protocol", protocol)
+    if settings.email_mailbox is not None:
+        set_setting("email_mailbox", settings.email_mailbox)
+    if settings.email_only_unread is not None:
+        set_setting("email_only_unread", settings.email_only_unread)
+    if settings.email_delete_after_fetch is not None:
+        set_setting("email_delete_after_fetch", settings.email_delete_after_fetch)
+    if settings.email_monitor_enabled is not None:
+        set_setting("email_monitor_enabled", settings.email_monitor_enabled)
+    if settings.email_check_interval_minutes is not None:
+        if settings.email_check_interval_minutes < 1:
+            raise HTTPException(status_code=400, detail="email_check_interval_minutes must be at least 1")
+        set_setting("email_check_interval_minutes", settings.email_check_interval_minutes)
     if settings.imap_host is not None:
         set_setting("imap_host", settings.imap_host)
     if settings.imap_port is not None:
@@ -536,4 +592,13 @@ async def update_settings(settings: SettingsUpdate, admin: dict = Depends(get_ad
         set_setting("imap_pass", settings.imap_pass)
     if settings.imap_use_ssl is not None:
         set_setting("imap_use_ssl", settings.imap_use_ssl)
+    if (
+        "imap_port" not in changed_fields
+        and ("email_protocol" in changed_fields or "imap_use_ssl" in changed_fields)
+    ):
+        protocol = get_setting("email_protocol", "imap")
+        use_ssl = get_setting("imap_use_ssl", True)
+        default_port = 995 if protocol == "pop3" and use_ssl else 110 if protocol == "pop3" else 993 if use_ssl else 143
+        set_setting("imap_port", default_port)
+    await restart_email_monitor()
     return {"message": "Settings updated"}

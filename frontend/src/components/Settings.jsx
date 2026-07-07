@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Mail, Phone, Save, CheckCircle, Trash2, UserPlus, Shield, Lock, Key, Bell, Server, Globe as GlobeIcon } from 'lucide-react';
+import { User, Mail, Phone, Save, CheckCircle, Trash2, UserPlus, Shield, Lock, Key, Bell, Server, Globe as GlobeIcon, Play, Square } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
@@ -7,15 +7,32 @@ import { API_BASE_URL } from '../config';
 const GlobalSettings = ({ token }) => {
     const [settings, setSettings] = useState({
         slack_webhook_url: '',
+        email_protocol: 'imap',
+        email_mailbox: 'inbox',
+        email_only_unread: true,
+        email_delete_after_fetch: false,
+        email_monitor_enabled: false,
+        email_check_interval_minutes: 60,
         imap_host: '',
         imap_port: 993,
         imap_user: '',
         imap_pass: '',
         imap_use_ssl: true
     });
+    const [monitorStatus, setMonitorStatus] = useState(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [runningNow, setRunningNow] = useState(false);
     const [msg, setMsg] = useState(null);
+
+    const fetchMonitorStatus = async () => {
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/email-monitor`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) setMonitorStatus(await res.json());
+        } catch (err) { console.error(err); }
+    };
 
     useEffect(() => {
         const fetchSettings = async () => {
@@ -31,6 +48,7 @@ const GlobalSettings = ({ token }) => {
             setLoading(false);
         };
         fetchSettings();
+        fetchMonitorStatus();
     }, [token]);
 
     const handleSave = async (e) => {
@@ -43,10 +61,54 @@ const GlobalSettings = ({ token }) => {
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify(settings)
             });
-            if (res.ok) setMsg({ type: 'success', text: 'Global settings saved!' });
-            else setMsg({ type: 'error', text: 'Failed to save settings' });
+            if (res.ok) {
+                setMsg({ type: 'success', text: 'Global settings saved!' });
+                fetchMonitorStatus();
+            } else {
+                const data = await res.json();
+                setMsg({ type: 'error', text: data.detail || 'Failed to save settings' });
+            }
         } catch (err) { setMsg({ type: 'error', text: 'Failed to save settings' }); }
         setSaving(false);
+    };
+
+    const handleRunNow = async () => {
+        setRunningNow(true);
+        setMsg(null);
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/email-monitor/run`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok) setMsg({ type: 'success', text: data.message });
+            else setMsg({ type: 'error', text: data.detail || 'Email fetch failed' });
+            fetchMonitorStatus();
+        } catch (err) {
+            setMsg({ type: 'error', text: 'Email fetch failed' });
+        }
+        setRunningNow(false);
+    };
+
+    const handleMonitorToggle = async (enabled) => {
+        const endpoint = enabled ? 'start' : 'stop';
+        setMsg(null);
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/email-monitor/${endpoint}`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setSettings({ ...settings, email_monitor_enabled: enabled });
+                setMonitorStatus(data);
+                setMsg({ type: 'success', text: enabled ? 'Email monitor started.' : 'Email monitor stopped.' });
+            } else {
+                setMsg({ type: 'error', text: data.detail || 'Failed to update monitor' });
+            }
+        } catch (err) {
+            setMsg({ type: 'error', text: 'Failed to update monitor' });
+        }
     };
 
     if (loading) return null;
@@ -79,11 +141,29 @@ const GlobalSettings = ({ token }) => {
 
             <div className="card">
                 <div className="card-header">
-                    <h3>Email Integration (IMAP)</h3>
+                    <h3>Email Monitoring</h3>
                 </div>
                 <div className="chart-wrapper" style={{ height: 'auto', padding: '1.5rem 2.5rem' }}>
                     <div className="form-row">
-                        <label className="form-label">IMAP Host</label>
+                        <label className="form-label">Protocol</label>
+                        <select
+                            value={settings.email_protocol}
+                            onChange={(e) => {
+                                const protocol = e.target.value;
+                                setSettings({
+                                    ...settings,
+                                    email_protocol: protocol,
+                                    imap_port: protocol === 'pop3' ? (settings.imap_use_ssl ? 995 : 110) : (settings.imap_use_ssl ? 993 : 143)
+                                });
+                            }}
+                            className="input-with-icon"
+                        >
+                            <option value="imap">IMAP</option>
+                            <option value="pop3">POP3</option>
+                        </select>
+                    </div>
+                    <div className="form-row">
+                        <label className="form-label">Mail Server</label>
                         <div className="input-container">
                             <GlobeIcon size={16} className="input-icon" />
                             <input
@@ -96,7 +176,18 @@ const GlobalSettings = ({ token }) => {
                         </div>
                     </div>
                     <div className="form-row">
-                        <label className="form-label">IMAP User</label>
+                        <label className="form-label">Port</label>
+                        <input
+                            type="number"
+                            min="1"
+                            max="65535"
+                            value={settings.imap_port}
+                            onChange={(e) => setSettings({ ...settings, imap_port: Number(e.target.value) })}
+                            className="input-with-icon"
+                        />
+                    </div>
+                    <div className="form-row">
+                        <label className="form-label">Username</label>
                         <div className="input-container">
                             <Mail size={16} className="input-icon" />
                             <input
@@ -109,7 +200,7 @@ const GlobalSettings = ({ token }) => {
                         </div>
                     </div>
                     <div className="form-row">
-                        <label className="form-label">IMAP Password</label>
+                        <label className="form-label">Password</label>
                         <div className="input-container">
                             <Lock size={16} className="input-icon" />
                             <input
@@ -121,6 +212,95 @@ const GlobalSettings = ({ token }) => {
                             />
                         </div>
                     </div>
+                    {settings.email_protocol === 'imap' && (
+                        <div className="form-row">
+                            <label className="form-label">Mailbox</label>
+                            <input
+                                type="text"
+                                value={settings.email_mailbox}
+                                onChange={(e) => setSettings({ ...settings, email_mailbox: e.target.value })}
+                                placeholder="inbox"
+                                className="input-with-icon"
+                            />
+                        </div>
+                    )}
+                    <div className="form-row">
+                        <label className="form-label">Check Interval</label>
+                        <input
+                            type="number"
+                            min="1"
+                            value={settings.email_check_interval_minutes}
+                            onChange={(e) => setSettings({ ...settings, email_check_interval_minutes: Number(e.target.value) })}
+                            className="input-with-icon"
+                        />
+                    </div>
+                    <label className="checkbox-label">
+                        <input
+                            type="checkbox"
+                            checked={settings.imap_use_ssl}
+                            onChange={(e) => {
+                                const useSsl = e.target.checked;
+                                setSettings({
+                                    ...settings,
+                                    imap_use_ssl: useSsl,
+                                    imap_port: settings.email_protocol === 'pop3' ? (useSsl ? 995 : 110) : (useSsl ? 993 : 143)
+                                });
+                            }}
+                        />
+                        Use SSL/TLS
+                    </label>
+                    {settings.email_protocol === 'imap' && (
+                        <label className="checkbox-label">
+                            <input
+                                type="checkbox"
+                                checked={settings.email_only_unread}
+                                onChange={(e) => setSettings({ ...settings, email_only_unread: e.target.checked })}
+                            />
+                            Only check unread messages
+                        </label>
+                    )}
+                    {settings.email_protocol === 'pop3' && (
+                        <label className="checkbox-label">
+                            <input
+                                type="checkbox"
+                                checked={settings.email_delete_after_fetch}
+                                onChange={(e) => setSettings({ ...settings, email_delete_after_fetch: e.target.checked })}
+                            />
+                            Delete POP3 messages after downloading reports
+                        </label>
+                    )}
+                    <label className="checkbox-label">
+                        <input
+                            type="checkbox"
+                            checked={settings.email_monitor_enabled}
+                            onChange={(e) => setSettings({ ...settings, email_monitor_enabled: e.target.checked })}
+                        />
+                        Run email monitor automatically
+                    </label>
+                    <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+                        <button className="btn-secondary" type="button" onClick={handleRunNow} disabled={runningNow}>
+                            <Play size={16} style={{ marginRight: '0.5rem' }} />
+                            {runningNow ? 'Checking...' : 'Run Now'}
+                        </button>
+                        {monitorStatus?.running ? (
+                            <button className="btn-secondary" type="button" onClick={() => handleMonitorToggle(false)}>
+                                <Square size={16} style={{ marginRight: '0.5rem' }} />
+                                Stop Monitor
+                            </button>
+                        ) : (
+                            <button className="btn-secondary" type="button" onClick={() => handleMonitorToggle(true)}>
+                                <Server size={16} style={{ marginRight: '0.5rem' }} />
+                                Start Monitor
+                            </button>
+                        )}
+                    </div>
+                    {monitorStatus && (
+                        <p className="text-muted" style={{ marginTop: '1rem', fontSize: '0.875rem' }}>
+                            Status: {monitorStatus.running ? 'running' : 'stopped'}
+                            {monitorStatus.last_run_at ? ` • Last run: ${new Date(monitorStatus.last_run_at).toLocaleString()}` : ''}
+                            {monitorStatus.next_run_at ? ` • Next run: ${new Date(monitorStatus.next_run_at).toLocaleString()}` : ''}
+                        </p>
+                    )}
                 </div>
             </div>
 

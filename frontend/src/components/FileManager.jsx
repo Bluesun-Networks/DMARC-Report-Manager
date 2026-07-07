@@ -65,7 +65,7 @@ const FileManager = () => {
                 headers: { 'Authorization': `Bearer ${user.token}` }
             });
             const data = await res.json();
-            alert(data.message);
+            alert(data.message || data.detail || "Email fetch completed");
             fetchFiles();
         } catch (err) {
             alert("Failed to fetch emails");
@@ -175,4 +175,3 @@ const FileManager = () => {
 
 
 export default FileManager;
-
